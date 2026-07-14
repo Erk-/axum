@@ -161,13 +161,7 @@ use std::{
     str,
     task::{ready, Context, Poll},
 };
-use tokio_tungstenite::{
-    tungstenite::{
-        self as ts,
-        protocol::{self, WebSocketConfig},
-    },
-    WebSocketStream,
-};
+use tokio_websockets::{Config, Limits, WebSocketStream};
 
 /// Extractor for establishing WebSocket connections.
 ///
@@ -181,7 +175,8 @@ use tokio_tungstenite::{
 #[cfg_attr(docsrs, doc(cfg(feature = "ws")))]
 #[must_use]
 pub struct WebSocketUpgrade<F = DefaultOnFailedUpgrade> {
-    config: WebSocketConfig,
+    config: Config,
+    limits: Limits,
     /// The chosen protocol sent in the `Sec-WebSocket-Protocol` header of the response.
     protocol: Option<HeaderValue>,
     /// `None` if HTTP/2+ WebSockets are used.
@@ -194,7 +189,7 @@ pub struct WebSocketUpgrade<F = DefaultOnFailedUpgrade> {
 impl<F> std::fmt::Debug for WebSocketUpgrade<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebSocketUpgrade")
-            .field("config", &self.config)
+            // .field("config", &self.config)
             .field("protocol", &self.protocol)
             .field("sec_websocket_key", &self.sec_websocket_key)
             .field("sec_websocket_protocol", &self.sec_websocket_protocol)
@@ -203,59 +198,59 @@ impl<F> std::fmt::Debug for WebSocketUpgrade<F> {
 }
 
 impl<F> WebSocketUpgrade<F> {
-    /// Read buffer capacity. The default value is 128KiB
-    pub fn read_buffer_size(mut self, size: usize) -> Self {
-        self.config.read_buffer_size = size;
-        self
-    }
+    // /// Read buffer capacity. The default value is 128KiB
+    // pub fn read_buffer_size(mut self, size: usize) -> Self {
+    //     self.config.read_buffer_size = size;
+    //     self
+    // }
 
-    /// The target minimum size of the write buffer to reach before writing the data
-    /// to the underlying stream.
-    ///
-    /// The default value is 128 KiB.
-    ///
-    /// If set to `0` each message will be eagerly written to the underlying stream.
-    /// It is often more optimal to allow them to buffer a little, hence the default value.
-    ///
-    /// Note: [`flush`](SinkExt::flush) will always fully write the buffer regardless.
-    pub fn write_buffer_size(mut self, size: usize) -> Self {
-        self.config.write_buffer_size = size;
-        self
-    }
+    // /// The target minimum size of the write buffer to reach before writing the data
+    // /// to the underlying stream.
+    // ///
+    // /// The default value is 128 KiB.
+    // ///
+    // /// If set to `0` each message will be eagerly written to the underlying stream.
+    // /// It is often more optimal to allow them to buffer a little, hence the default value.
+    // ///
+    // /// Note: [`flush`](SinkExt::flush) will always fully write the buffer regardless.
+    // pub fn write_buffer_size(mut self, size: usize) -> Self {
+    //     self.config.write_buffer_size = size;
+    //     self
+    // }
 
-    /// The max size of the write buffer in bytes. Setting this can provide backpressure
-    /// in the case the write buffer is filling up due to write errors.
-    ///
-    /// The default value is unlimited.
-    ///
-    /// Note: The write buffer only builds up past [`write_buffer_size`](Self::write_buffer_size)
-    /// when writes to the underlying stream are failing. So the **write buffer can not
-    /// fill up if you are not observing write errors even if not flushing**.
-    ///
-    /// Note: Should always be at least [`write_buffer_size + 1 message`](Self::write_buffer_size)
-    /// and probably a little more depending on error handling strategy.
-    pub fn max_write_buffer_size(mut self, max: usize) -> Self {
-        self.config.max_write_buffer_size = max;
-        self
-    }
+    // /// The max size of the write buffer in bytes. Setting this can provide backpressure
+    // /// in the case the write buffer is filling up due to write errors.
+    // ///
+    // /// The default value is unlimited.
+    // ///
+    // /// Note: The write buffer only builds up past [`write_buffer_size`](Self::write_buffer_size)
+    // /// when writes to the underlying stream are failing. So the **write buffer can not
+    // /// fill up if you are not observing write errors even if not flushing**.
+    // ///
+    // /// Note: Should always be at least [`write_buffer_size + 1 message`](Self::write_buffer_size)
+    // /// and probably a little more depending on error handling strategy.
+    // pub fn max_write_buffer_size(mut self, max: usize) -> Self {
+    //     self.config.max_write_buffer_size = max;
+    //     self
+    // }
 
     /// Set the maximum message size (defaults to 64 megabytes)
     pub fn max_message_size(mut self, max: usize) -> Self {
-        self.config.max_message_size = Some(max);
+        self.limits.max_payload_len = max;
         self
     }
 
-    /// Set the maximum frame size (defaults to 16 megabytes)
-    pub fn max_frame_size(mut self, max: usize) -> Self {
-        self.config.max_frame_size = Some(max);
-        self
-    }
+    // /// Set the maximum frame size (defaults to 16 megabytes)
+    // pub fn max_frame_size(mut self, max: usize) -> Self {
+    //     self.config.max_frame_size = Some(max);
+    //     self
+    // }
 
-    /// Allow server to accept unmasked frames (defaults to false)
-    pub fn accept_unmasked_frames(mut self, accept: bool) -> Self {
-        self.config.accept_unmasked_frames = accept;
-        self
-    }
+    // /// Allow server to accept unmasked frames (defaults to false)
+    // pub fn accept_unmasked_frames(mut self, accept: bool) -> Self {
+    //     self.config.accept_unmasked_frames = accept;
+    //     self
+    // }
 
     /// Set the known protocols.
     ///
@@ -381,6 +376,7 @@ impl<F> WebSocketUpgrade<F> {
     {
         WebSocketUpgrade {
             config: self.config,
+            limits: self.limits,
             protocol: self.protocol,
             sec_websocket_key: self.sec_websocket_key,
             on_upgrade: self.on_upgrade,
@@ -399,7 +395,6 @@ impl<F> WebSocketUpgrade<F> {
         F: OnFailedUpgrade,
     {
         let on_upgrade = self.on_upgrade;
-        let config = self.config;
         let on_failed_upgrade = self.on_failed_upgrade;
 
         let protocol = self.protocol.clone();
@@ -414,9 +409,11 @@ impl<F> WebSocketUpgrade<F> {
             };
             let upgraded = TokioIo::new(upgraded);
 
-            let socket =
-                WebSocketStream::from_raw_socket(upgraded, protocol::Role::Server, Some(config))
-                    .await;
+            let mut socket = tokio_websockets::server::Builder::new();
+            socket = socket.config(self.config);
+            socket = socket.limits(self.limits);
+            let socket = socket.serve(upgraded);
+
             let socket = WebSocket {
                 inner: socket,
                 protocol,
@@ -556,6 +553,7 @@ where
 
         Ok(Self {
             config: Default::default(),
+            limits: Default::default(),
             protocol: None,
             sec_websocket_key,
             on_upgrade,
@@ -616,7 +614,7 @@ impl WebSocket {
     /// This method delegates to [`Sink`].
     pub async fn send(&mut self, msg: Message) -> Result<(), Error> {
         self.inner
-            .send(msg.into_tungstenite())
+            .send(msg.into_tws())
             .await
             .map_err(Error::new)
     }
@@ -641,7 +639,7 @@ impl Stream for WebSocket {
         loop {
             match ready!(self.inner.poll_next_unpin(cx)) {
                 Some(Ok(msg)) => {
-                    if let Some(msg) = Message::from_tungstenite(msg) {
+                    if let Some(msg) = Message::from_tws(msg) {
                         return Poll::Ready(Some(Ok(msg)));
                     }
                 }
@@ -661,7 +659,7 @@ impl Sink<Message> for WebSocket {
 
     fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
         Pin::new(&mut self.inner)
-            .start_send(item.into_tungstenite())
+            .start_send(item.into_tws())
             .map_err(Error::new)
     }
 
@@ -678,24 +676,22 @@ impl Sink<Message> for WebSocket {
 ///
 /// An [Utf8Bytes] is always guaranteed to contain valid UTF-8.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Utf8Bytes(ts::Utf8Bytes);
+pub struct Utf8Bytes(Bytes);
 
 impl Utf8Bytes {
     /// Creates from a static str.
     #[inline]
     #[must_use]
     pub const fn from_static(str: &'static str) -> Self {
-        Self(ts::Utf8Bytes::from_static(str))
+        Self(Bytes::from_static(str.as_bytes()))
     }
 
     /// Returns as a string slice.
     #[inline]
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-
-    fn into_tungstenite(self) -> ts::Utf8Bytes {
-        self.0
+        // SAFETY: We only allow constructing this type from already checked string types.
+        // This could be done with unsafe, to remove this check every time.
+        std::str::from_utf8(&self.0).unwrap()
     }
 }
 
@@ -732,7 +728,8 @@ impl TryFrom<Bytes> for Utf8Bytes {
 
     #[inline]
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
-        Ok(Self(bytes.try_into()?))
+        let _ = std::str::from_utf8(&bytes)?;
+        Ok(Self(bytes))
     }
 }
 
@@ -741,7 +738,8 @@ impl TryFrom<Vec<u8>> for Utf8Bytes {
 
     #[inline]
     fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
-        Ok(Self(v.try_into()?))
+        let _ = std::str::from_utf8(&v)?;
+        Ok(Self(Bytes::from(v)))
     }
 }
 
@@ -755,14 +753,16 @@ impl From<String> for Utf8Bytes {
 impl From<&str> for Utf8Bytes {
     #[inline]
     fn from(s: &str) -> Self {
-        Self(s.into())
+        let bytes = Bytes::from_owner(s.to_owned());
+        Self(bytes)
     }
 }
 
 impl From<&String> for Utf8Bytes {
     #[inline]
     fn from(s: &String) -> Self {
-        Self(s.into())
+        let bytes = Bytes::from_owner(s.clone());
+        Self(bytes)
     }
 }
 
@@ -869,34 +869,46 @@ pub enum Message {
 }
 
 impl Message {
-    fn into_tungstenite(self) -> ts::Message {
+    fn into_tws(self) -> tokio_websockets::Message {
         match self {
-            Self::Text(text) => ts::Message::Text(text.into_tungstenite()),
-            Self::Binary(binary) => ts::Message::Binary(binary),
-            Self::Ping(ping) => ts::Message::Ping(ping),
-            Self::Pong(pong) => ts::Message::Pong(pong),
-            Self::Close(Some(close)) => ts::Message::Close(Some(ts::protocol::CloseFrame {
-                code: ts::protocol::frame::coding::CloseCode::from(close.code),
-                reason: close.reason.into_tungstenite(),
-            })),
-            Self::Close(None) => ts::Message::Close(None),
+            Self::Text(text) => tokio_websockets::Message::text(text.0),
+            Self::Binary(binary) => tokio_websockets::Message::binary(binary),
+            Self::Ping(ping) => tokio_websockets::Message::ping(ping),
+            Self::Pong(pong) => tokio_websockets::Message::pong(pong),
+            Self::Close(Some(CloseFrame { code, reason })) => {
+                let close_code = tokio_websockets::CloseCode::try_from(code).ok();
+                tokio_websockets::Message::close(close_code, &reason)
+            }
+            Self::Close(None) => tokio_websockets::Message::close(None, ""),
         }
     }
 
-    fn from_tungstenite(message: ts::Message) -> Option<Self> {
-        match message {
-            ts::Message::Text(text) => Some(Self::Text(Utf8Bytes(text))),
-            ts::Message::Binary(binary) => Some(Self::Binary(binary)),
-            ts::Message::Ping(ping) => Some(Self::Ping(ping)),
-            ts::Message::Pong(pong) => Some(Self::Pong(pong)),
-            ts::Message::Close(Some(close)) => Some(Self::Close(Some(CloseFrame {
-                code: close.code.into(),
-                reason: Utf8Bytes(close.reason),
-            }))),
-            ts::Message::Close(None) => Some(Self::Close(None)),
-            // we can ignore `Frame` frames as recommended by the tungstenite maintainers
-            // https://github.com/snapview/tungstenite-rs/issues/268
-            ts::Message::Frame(_) => None,
+    fn from_tws(message: tokio_websockets::Message) -> Option<Self> {
+        if message.is_text() {
+            let payload = message.into_payload();
+            if payload.utf8_validated {
+                Some(Self::Text(Utf8Bytes(payload.into())))
+            } else {
+                let _ = std::str::from_utf8(&payload).ok()?;
+                Some(Self::Text(Utf8Bytes(payload.into())))
+            }
+        } else if message.is_binary() {
+            let payload = message.into_payload();
+            Some(Self::Binary(payload.into()))
+        } else if message.is_ping() {
+            let payload = message.into_payload();
+            Some(Self::Ping(payload.into()))
+        } else if message.is_pong() {
+            let payload = message.into_payload();
+            Some(Self::Pong(payload.into()))
+        } else if message.is_close() {
+            let (code, reason) = message.as_close()?;
+            Some(Self::Close(Some(CloseFrame {
+                code: code.into(),
+                reason: reason.into(),
+            })))
+        } else {
+            None
         }
     }
 
@@ -1165,7 +1177,6 @@ mod tests {
     use hyper_util::rt::TokioExecutor;
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
-    use tokio_tungstenite::tungstenite;
     use tower::ServiceExt;
 
     #[crate::test]
@@ -1215,9 +1226,9 @@ mod tests {
     async fn integration_test() {
         let addr = spawn_service(echo_app());
         let uri = format!("ws://{addr}/echo").try_into().unwrap();
-        let req = tungstenite::client::ClientRequestBuilder::new(uri)
-            .with_sub_protocol(TEST_ECHO_APP_REQ_SUBPROTO);
-        let (socket, response) = tokio_tungstenite::connect_async(req).await.unwrap();
+        let mut bla = tokio_websockets::client::Builder::from_uri(uri);
+        bla = bla.add_header(http::header::SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static(TEST_ECHO_APP_REQ_SUBPROTO)).unwrap();
+        let (socket, response) = bla.connect().await.unwrap();
         test_echo_app(socket, response.headers()).await;
     }
 
@@ -1296,21 +1307,22 @@ mod tests {
         mut socket: WebSocketStream<S>,
         headers: &http::HeaderMap,
     ) {
+        use std::ops::Deref as _;
         assert_eq!(headers[http::header::SEC_WEBSOCKET_PROTOCOL], "echo");
 
-        let input = tungstenite::Message::Text(tungstenite::Utf8Bytes::from_static("foobar"));
+        let input = tokio_websockets::Message::text("foobar");
         socket.send(input.clone()).await.unwrap();
         let output = socket.next().await.unwrap().unwrap();
-        assert_eq!(input, output);
+        assert_eq!(input.as_payload().deref(), output.as_payload().deref());
 
         socket
-            .send(tungstenite::Message::Ping(Bytes::from_static(b"ping")))
+            .send(tokio_websockets::Message::ping(Bytes::from_static(b"ping")))
             .await
             .unwrap();
         let output = socket.next().await.unwrap().unwrap();
         assert_eq!(
-            output,
-            tungstenite::Message::Pong(Bytes::from_static(b"ping"))
+            output.as_payload().deref(),
+            b"ping"
         );
     }
 }
