@@ -613,10 +613,7 @@ impl WebSocket {
     ///
     /// This method delegates to [`Sink`].
     pub async fn send(&mut self, msg: Message) -> Result<(), Error> {
-        self.inner
-            .send(msg.into_tws())
-            .await
-            .map_err(Error::new)
+        self.inner.send(msg.into_tws()).await.map_err(Error::new)
     }
 
     /// Return the selected WebSocket subprotocol, if one has been chosen.
@@ -675,15 +672,22 @@ impl Sink<Message> for WebSocket {
 /// UTF-8 wrapper for [Bytes].
 ///
 /// An [Utf8Bytes] is always guaranteed to contain valid UTF-8.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Utf8Bytes(Bytes);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Utf8Bytes(tokio_websockets::Payload);
+
+impl Default for Utf8Bytes {
+    fn default() -> Self {
+        Utf8Bytes::from_static("")
+    }
+}
 
 impl Utf8Bytes {
     /// Creates from a static str.
     #[inline]
     #[must_use]
-    pub const fn from_static(str: &'static str) -> Self {
-        Self(Bytes::from_static(str.as_bytes()))
+    pub fn from_static(str: &'static str) -> Self {
+        let bytes = Bytes::from_static(str.as_bytes());
+        Self(bytes.into())
     }
 
     /// Returns as a string slice.
@@ -729,7 +733,7 @@ impl TryFrom<Bytes> for Utf8Bytes {
     #[inline]
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         let _ = std::str::from_utf8(&bytes)?;
-        Ok(Self(bytes))
+        Ok(Self(bytes.into()))
     }
 }
 
@@ -739,7 +743,7 @@ impl TryFrom<Vec<u8>> for Utf8Bytes {
     #[inline]
     fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
         let _ = std::str::from_utf8(&v)?;
-        Ok(Self(Bytes::from(v)))
+        Ok(Self(v.into()))
     }
 }
 
@@ -753,16 +757,14 @@ impl From<String> for Utf8Bytes {
 impl From<&str> for Utf8Bytes {
     #[inline]
     fn from(s: &str) -> Self {
-        let bytes = Bytes::from_owner(s.to_owned());
-        Self(bytes)
+        Self(s.to_owned().into())
     }
 }
 
 impl From<&String> for Utf8Bytes {
     #[inline]
     fn from(s: &String) -> Self {
-        let bytes = Bytes::from_owner(s.clone());
-        Self(bytes)
+        Self(s.to_owned().into())
     }
 }
 
@@ -885,13 +887,10 @@ impl Message {
 
     fn from_tws(message: tokio_websockets::Message) -> Option<Self> {
         if message.is_text() {
-            let payload = message.into_payload();
-            if payload.utf8_validated {
-                Some(Self::Text(Utf8Bytes(payload.into())))
-            } else {
-                let _ = std::str::from_utf8(&payload).ok()?;
-                Some(Self::Text(Utf8Bytes(payload.into())))
-            }
+            // If the message is a text message that comes from
+            // tokio-websockets we can assume that it is a utf-8
+            // string as it would otherwise have failed earlier.
+            Some(Self::Text(Utf8Bytes(message.into_payload())))
         } else if message.is_binary() {
             let payload = message.into_payload();
             Some(Self::Binary(payload.into()))
@@ -929,7 +928,7 @@ impl Message {
             Self::Binary(data) | Self::Ping(data) | Self::Pong(data) => {
                 Ok(Utf8Bytes::try_from(data).map_err(Error::new)?)
             }
-            Self::Close(None) => Ok(Utf8Bytes::default()),
+            Self::Close(None) => Ok(Utf8Bytes(Bytes::new().into())),
             Self::Close(Some(frame)) => Ok(frame.reason),
         }
     }
@@ -1227,7 +1226,12 @@ mod tests {
         let addr = spawn_service(echo_app());
         let uri = format!("ws://{addr}/echo").try_into().unwrap();
         let mut bla = tokio_websockets::client::Builder::from_uri(uri);
-        bla = bla.add_header(http::header::SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static(TEST_ECHO_APP_REQ_SUBPROTO)).unwrap();
+        bla = bla
+            .add_header(
+                http::header::SEC_WEBSOCKET_PROTOCOL,
+                HeaderValue::from_static(TEST_ECHO_APP_REQ_SUBPROTO),
+            )
+            .unwrap();
         let (socket, response) = bla.connect().await.unwrap();
         test_echo_app(socket, response.headers()).await;
     }
@@ -1320,9 +1324,6 @@ mod tests {
             .await
             .unwrap();
         let output = socket.next().await.unwrap().unwrap();
-        assert_eq!(
-            output.as_payload().deref(),
-            b"ping"
-        );
+        assert_eq!(output.as_payload().deref(), b"ping");
     }
 }
